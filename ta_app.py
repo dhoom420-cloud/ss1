@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime
 from scipy.signal import argrelextrema
+from zoneinfo import ZoneInfo  # Python 3.9+ (available on 3.11)
 
 st.set_page_config(page_title="TA Scout", layout="wide")
 
@@ -219,6 +220,124 @@ def get_data(ticker: str, period: str = "1y", interval: str = "1d", prepost: boo
     # Still empty after all attempts
     return pd.DataFrame()
 
+def _thumb_from_yf_item(it):
+    # yfinance 'news' sometimes includes thumbnails
+    try:
+        res = (it.get("thumbnail") or {}).get("resolutions") or []
+        if res:
+            res = sorted(res, key=lambda r: r.get("width", 0), reverse=True)
+            return res[0].get("url")
+    except Exception:
+        pass
+    return None
+
+def _to_et_timestamp(ts):
+    # Convert epoch seconds -> pandas Timestamp in America/New_York
+    try:
+        return pd.Timestamp.utcfromtimestamp(int(ts)).tz_localize("UTC").tz_convert("America/New_York")
+    except Exception:
+        return pd.NaT
+
+def get_news_yf(ticker: str, limit: int = 8):
+    """Fetch news using yfinance (no API key). Returns list of dicts."""
+    rows, seen = [], set()
+    try:
+        items = yf.Ticker(ticker).news or []
+    except Exception:
+        items = []
+    for it in items:
+        title = it.get("title") or ""
+        link = it.get("link") or it.get("url") or ""
+        if not title or not link:
+            continue
+        key = (title, link)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "title": title,
+            "link": link,
+            "publisher": it.get("publisher") or "",
+            "published": _to_et_timestamp(it.get("providerPublishTime")),
+            "thumbnail": _thumb_from_yf_item(it),
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+def get_news_rss(ticker: str, limit: int = 8):
+    """Fallback using Yahoo Finance RSS via feedparser (needs `pip install feedparser`)."""
+    try:
+        import feedparser, urllib.parse, email.utils
+    except Exception:
+        return []
+
+    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={urllib.parse.quote(ticker)}&region=US&lang=en-US"
+    feed = feedparser.parse(url)
+    rows = []
+    for e in (feed.entries or [])[: limit * 2]:
+        title = getattr(e, "title", "")
+        link = getattr(e, "link", "")
+        if not title or not link:
+            continue
+        # Published time to ET if available
+        pub = getattr(e, "published", None) or getattr(e, "updated", None)
+        try:
+            dt = email.utils.parsedate_to_datetime(pub) if pub else None
+            if dt and not dt.tzinfo:
+                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+            if dt:
+                dt = dt.astimezone(ZoneInfo("America/New_York"))
+        except Exception:
+            dt = None
+
+        rows.append({
+            "title": title,
+            "link": link,
+            "publisher": (getattr(getattr(e, "source", None) or {}, "title", None) or "Yahoo Finance"),
+            "published": pd.Timestamp(dt) if dt else pd.NaT,
+            "thumbnail": None,  # RSS usually doesn’t include thumbs
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+def get_news(ticker: str, limit: int = 8):
+    """Try yfinance first; if empty, try RSS fallback (if feedparser installed)."""
+    rows = get_news_yf(ticker, limit=limit)
+    if not rows:
+        rows = get_news_rss(ticker, limit=limit)
+    # sort newest first if timestamps exist
+    try:
+        rows.sort(key=lambda r: r.get("published") or pd.Timestamp.min, reverse=True)
+    except Exception:
+        pass
+    return rows
+
+def render_news(rows):
+    """Pretty Streamlit rendering for news rows."""
+    if not rows:
+        st.info("No recent news found for this ticker.")
+        return
+    st.subheader("📰 Latest news")
+    for r in rows:
+        c1, c2 = st.columns([1, 5])
+        with c1:
+            if r.get("thumbnail"):
+                st.image(r["thumbnail"], use_container_width=True)
+        with c2:
+            st.markdown(f"**[{r['title']}]({r['link']})**")
+            meta_bits = []
+            if r.get("publisher"):
+                meta_bits.append(r["publisher"])
+            ts = r.get("published")
+            if isinstance(ts, pd.Timestamp) and not pd.isna(ts):
+                meta_bits.append(ts.strftime("%b %d, %Y %I:%M %p %Z"))
+            if meta_bits:
+                st.caption(" · ".join(meta_bits))
+        st.divider()
+
+
 # ============ UI ============
 
 st.title("📈 TA Scout — Support/Resistance & Breakouts")
@@ -325,6 +444,11 @@ if st.button("Analyze") or ticker:
                f"Swing lookback={lookback}. Volume multiple={vol_mult}.")
     if is_intraday(interval) and period != effective_period:
         st.info(f"Intraday constraint: period **{period}** was clamped to **{effective_period}** for Yahoo compatibility.")
+# After your existing analysis/summary blocks:
+    st.markdown("### ")
+    with st.spinner("Loading news…"):
+        news_rows = get_news(ticker, limit=8)
+    render_news(news_rows)
 
 # Footer
 st.caption("Educational use only — not investment advice.")
