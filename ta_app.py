@@ -1,9 +1,9 @@
 # ta_app.py
 # ---------------------------------------------------------
-# TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD & News
+# TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD, News + Cheat Sheet (Tabs)
 # ---------------------------------------------------------
 # pip install streamlit yfinance pandas numpy plotly
-# (optional) pip install feedparser
+# (optional for RSS fallback in News): pip install feedparser
 
 import numpy as np
 import pandas as pd
@@ -175,7 +175,7 @@ def get_sr_levels(df: pd.DataFrame, lookback: int = 3, max_levels: int = 8):
     sup_sorted = sorted(sup, key=lambda x: (-x["touches"], abs(x["level"]-px)))[:max_levels]
     return res_sorted, sup_sorted, tol
 
-# =================== Breakouts (existing) ===================
+# =================== Breakouts ===================
 
 def bollinger_bands(close: pd.Series, n: int = 20, k: float = 2.0):
     ma = close.rolling(n, min_periods=1).mean()
@@ -224,7 +224,7 @@ def sr_breakout_lastbar(df, resistances, supports, vol_mult: float = 1.5):
         bear = (prev["Close"] >= nearest_sup) and (last["Close"] < nearest_sup) and (last["Volume"] > vol20*vol_mult)
     return {"type":"S/R","bull":bool(bull),"bear":bool(bear),"level_up":nearest_res,"level_dn":nearest_sup}
 
-# =================== NEW: Regime, Supertrend, Squeeze, MACD ===================
+# =================== Regime, Supertrend, Squeeze, MACD ===================
 
 def regime_series(df, fast=50, slow=200):
     ema_fast = df["Close"].ewm(span=fast, adjust=False, min_periods=1).mean()
@@ -278,7 +278,7 @@ def macd(close, fast=12, slow=26, signal=9):
     hist = line - sig
     return line, sig, hist
 
-# =================== News helpers (same as before) ===================
+# =================== News helpers ===================
 
 def _thumb_from_yf_item(it):
     try:
@@ -366,7 +366,6 @@ def render_news(rows):
     if not rows:
         st.info("No recent news found for this ticker.")
         return
-    st.subheader("📰 Latest news")
     for r in rows:
         c1, c2 = st.columns([1, 5])
         with c1:
@@ -381,6 +380,92 @@ def render_news(rows):
                 meta.append(ts.strftime("%b %d, %Y %I:%M %p %Z"))
             if meta: st.caption(" · ".join(meta))
         st.divider()
+
+# =================== Cheat Sheet ===================
+
+def render_cheatsheet():
+    with st.expander("📘 Technical Indicator Cheat Sheet (tap to open)", expanded=False):
+        st.markdown("""
+### Core Prices & Volume
+- **OHLCV**: Open, High, Low, Close, Volume per bar. Many signals also reference **VOL20** (20-bar average volume).
+
+---
+
+### Trend & Averages
+- **SMA(n)** — Simple Moving Average  
+  Average of last _n_ closes.  
+  `SMA_n = (Σ Close) / n`
+
+- **EMA(n)** — Exponential Moving Average  
+  Weights recent prices more.  
+  `EMA_t = α·Close_t + (1−α)·EMA_{t−1}`, `α = 2/(n+1)`  
+  **Use**: Trend filter (e.g., **Regime** = EMA50 > EMA200).
+
+---
+
+### Volatility
+- **ATR(n)** — Average True Range  
+  `TR = max(High−Low, |High−PrevClose|, |Low−PrevClose|)`; `ATR_n` is rolling avg of TR.  
+  **Use**: Position sizing, stops, S/R clustering tolerance.
+
+- **Bollinger Bands (BB)**  
+  `MA = SMA(Close, n)`; **Upper/Lower** = `MA ± k·σ`.  
+  **Breakout** when Close crosses bands (with volume).
+
+- **Keltner Channels (KC)**  
+  `Mid = EMA(Close, n)`; **Upper/Lower** = `Mid ± m·ATR(n)`.  
+  **Squeeze** when BB are inside KC ⇒ contraction.
+
+---
+
+### Momentum
+- **RSI(n)** — Relative Strength Index  
+  `RS = AvgGain / AvgLoss`; `RSI = 100 − 100/(1+RS)`.
+
+- **MACD (12,26,9)**  
+  `MACD = EMA_12 − EMA_26`; **Signal** = EMA_9(MACD); **Hist** = MACD − Signal.  
+  **Read**: Histogram flip ↑ often confirms bullish momentum.
+
+---
+
+### Breakouts & Levels
+- **Support/Resistance (S/R)**  
+  From swing highs/lows, clustered within tolerance ≈ `max(0.5·ATR, 0.75% of price)`.  
+  **Breakout/Down** requires **volume spike** vs VOL20.
+
+- **Donchian (n)**  
+  Highest high / lowest low over last _n_ bars (shifted).  
+  Cross with volume ⇒ breakout.
+
+- **52-Week Breakout**  
+  Donchian with `n≈252` trading days.
+
+- **ORB (intraday)**  
+  First X minutes range; break with volume confirms move.
+
+---
+
+### Trend-Following Stops
+- **Supertrend (n, m)**  
+  Uses `HL2 ± m·ATR(n)`; flips when price pierces the active band.
+
+- **Chandelier Exit (n, k)** (optional)  
+  Long stop = `HighestHigh_n − k·ATR(n)`.
+
+---
+
+### Volume & Confirmation
+- **VOL20** = 20-bar avg volume; we gate breakouts with `Volume > vol_mult × VOL20`.
+
+---
+
+### Playbooks
+- **Breakout + Regime**: Donchian(20) ↑ **and** EMA50>EMA200 **and** Volume > 1.5×VOL20.  
+- **Squeeze Release**: Squeeze **ON** → **OFF** + MACD hist flip ↑ + close above KC mid / Supertrend.  
+- **Intraday**: ORB High break above VWAP (if added) with strong volume.
+
+*Educational use only — not investment advice.*
+        """)
 
 # =================== Data fetch with retries & fallbacks ===================
 
@@ -414,7 +499,7 @@ def get_data(ticker: str, period: str = "1y", interval: str = "1d", prepost: boo
 
 # =================== UI ===================
 
-st.title("📈 TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD & News")
+st.title("📈 TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD, News + Cheat Sheet")
 
 col0, col1, col2 = st.columns([2, 1, 1])
 with col0:
@@ -460,15 +545,9 @@ with st.sidebar:
     macd_slow = st.number_input("MACD slow", value=26, min_value=5, max_value=100, step=1)
     macd_sig  = st.number_input("MACD signal", value=9, min_value=2, max_value=50, step=1)
 
-settings = {
-    "dc20": dc20_on, "dc20_n": int(dc20_n),
-    "dc55": dc55_on, "dc55_n": int(dc55_n),
-    "w52": w52_on,  "w52_bars": 252,
-    "bb": bb_on,    "bb_n": int(bb_n), "bb_k": float(bb_k),
-}
+tabs = st.tabs(["📊 Chart", "🧱 Levels & Signals", "📰 News", "📘 Cheat Sheet"])
 
-# =================== Main action ===================
-
+# Primary action
 if st.button("Analyze") or ticker:
     with st.spinner("Fetching & computing…"):
         df = get_data(ticker, period=period, interval=interval, prepost=prepost)
@@ -483,22 +562,23 @@ if st.button("Analyze") or ticker:
         )
         st.stop()
 
-    # ------- Compute S/R & existing breakouts -------
+    # ------- Compute S/R -------
     resistances, supports, tol = get_sr_levels(df, lookback=lookback, max_levels=max_levels)
     sr_sig = sr_breakout_lastbar(df, resistances, supports, vol_mult=vol_mult)
 
+    # ------- Breakouts -------
     breakout_series = {}
-    if settings["dc20"]: breakout_series["DC20"] = donchian_breakout(df, n=settings["dc20_n"], vol_mult=vol_mult)
-    if settings["dc55"]: breakout_series["DC55"] = donchian_breakout(df, n=settings["dc55_n"], vol_mult=vol_mult)
-    if settings["bb"]:   breakout_series["BB"]   = bollinger_breakout(df, n=settings["bb_n"], k=settings["bb_k"], vol_mult=vol_mult)
-    if settings["w52"]:  breakout_series["W52"]  = fiftytwo_week_breakout(df, vol_mult=vol_mult, bars=settings["w52_bars"])
+    if dc20_on: breakout_series["DC20"] = donchian_breakout(df, n=int(dc20_n), vol_mult=vol_mult)
+    if dc55_on: breakout_series["DC55"] = donchian_breakout(df, n=int(dc55_n), vol_mult=vol_mult)
+    if bb_on:   breakout_series["BB"]   = bollinger_breakout(df, n=int(bb_n), k=float(bb_k), vol_mult=vol_mult)
+    if w52_on:  breakout_series["W52"]  = fiftytwo_week_breakout(df, vol_mult=vol_mult, bars=252)
 
-    # ------- NEW: Regime, Supertrend, Squeeze, MACD -------
+    # ------- Regime / Supertrend / Squeeze / MACD -------
     ema_fast, ema_slow, regime = regime_series(df, fast=int(regime_fast), slow=int(regime_slow))
     regime_now = bool(regime.iloc[-1])
 
     st_line, st_up = supertrend(df, n=int(st_n), m=float(st_m))
-    st_cross = st_up != st_up.shift(1)  # supertrend flips
+    st_cross = st_up != st_up.shift(1)
 
     sq_on_mask, sq_off_mask, (bb_ma, bb_u, bb_l, kc_u, kc_l) = squeeze_on(
         df, bb_n=int(sq_bb_n), bb_k=float(sq_bb_k), kc_n=int(sq_kc_n), kc_m=float(sq_kc_m)
@@ -508,175 +588,178 @@ if st.button("Analyze") or ticker:
     macd_bull_flip = (macd_hist.iloc[-1] > 0) and (macd_hist.iloc[-2] <= 0) if len(macd_hist) >= 2 else False
     macd_bear_flip = (macd_hist.iloc[-1] < 0) and (macd_hist.iloc[-2] >= 0) if len(macd_hist) >= 2 else False
 
-    # ------- Chart -------
-    xidx = plotly_x(df.index)
-    fig = go.Figure(data=[go.Candlestick(
-        x=xidx, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"
-    )])
+    # -------------------- TAB 1: CHART --------------------
+    with tabs[0]:
+        xidx = plotly_x(df.index)
+        fig = go.Figure(data=[go.Candlestick(
+            x=xidx, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price"
+        )])
 
-    # EMAs for regime
-    fig.add_trace(go.Scatter(x=xidx, y=ema_fast, name=f"EMA{int(regime_fast)}", mode="lines"))
-    fig.add_trace(go.Scatter(x=xidx, y=ema_slow, name=f"EMA{int(regime_slow)}", mode="lines"))
+        # EMAs for regime
+        fig.add_trace(go.Scatter(x=xidx, y=ema_fast, name=f"EMA{int(regime_fast)}", mode="lines"))
+        fig.add_trace(go.Scatter(x=xidx, y=ema_slow, name=f"EMA{int(regime_slow)}", mode="lines"))
 
-    # Supertrend line
-    if st_on:
-        fig.add_trace(go.Scatter(x=xidx, y=st_line, name="Supertrend", mode="lines"))
+        # Supertrend line + flips
+        if st_on:
+            fig.add_trace(go.Scatter(x=xidx, y=st_line, name="Supertrend", mode="lines"))
+            recent = min(len(df), 400)
+            flip_mask = st_cross.iloc[-recent:].fillna(False).to_numpy()
+            if flip_mask.any():
+                y_slice = df["Close"].iloc[-recent:]
+                x_slice = xidx[-recent:]
+                fig.add_trace(go.Scatter(
+                    x=x_slice[flip_mask], y=y_slice[flip_mask],
+                    mode="markers", name="ST Flip",
+                    marker_symbol="x", marker_size=10,
+                    hovertemplate="Supertrend flip<extra></extra>"
+                ))
 
-        # mark flips
-        recent = min(len(df), 400)
-        flip_mask = st_cross.iloc[-recent:].fillna(False).to_numpy()
-        if flip_mask.any():
-            y_slice = df["Close"].iloc[-recent:]
-            x_slice = xidx[-recent:]
-            fig.add_trace(go.Scatter(
-                x=x_slice[flip_mask], y=y_slice[flip_mask],
-                mode="markers", name="ST Flip",
-                marker_symbol="x", marker_size=10,
-                hovertemplate="Supertrend flip<extra></extra>"
-            ))
+        # Optional Squeeze guides + dots
+        if sq_on:
+            fig.add_trace(go.Scatter(x=xidx, y=bb_u, name="BB Upper", mode="lines", opacity=0.2, showlegend=False))
+            fig.add_trace(go.Scatter(x=xidx, y=bb_l, name="BB Lower", mode="lines", opacity=0.2, showlegend=False))
+            fig.add_trace(go.Scatter(x=xidx, y=kc_u, name="KC Upper", mode="lines", opacity=0.15, showlegend=False))
+            fig.add_trace(go.Scatter(x=xidx, y=kc_l, name="KC Lower", mode="lines", opacity=0.15, showlegend=False))
+            recent = min(len(df), 400)
+            m = sq_on_mask.iloc[-recent:].to_numpy()
+            if m.any():
+                fig.add_trace(go.Scatter(
+                    x=xidx[-recent:][m],
+                    y=df["Low"].iloc[-recent:][m]*0.995,
+                    mode="markers", name="Squeeze ON",
+                    marker_symbol="circle", marker_size=8,
+                    hovertemplate="Squeeze ON<extra></extra>"
+                ))
 
-    # Optional Squeeze visual guides (thin bands)
-    if sq_on:
-        fig.add_trace(go.Scatter(x=xidx, y=bb_u, name="BB Upper", mode="lines", opacity=0.2, showlegend=False))
-        fig.add_trace(go.Scatter(x=xidx, y=bb_l, name="BB Lower", mode="lines", opacity=0.2, showlegend=False))
-        fig.add_trace(go.Scatter(x=xidx, y=kc_u, name="KC Upper", mode="lines", opacity=0.15, showlegend=False))
-        fig.add_trace(go.Scatter(x=xidx, y=kc_l, name="KC Lower", mode="lines", opacity=0.15, showlegend=False))
-        # dots during squeeze ON
-        recent = min(len(df), 400)
-        m = sq_on_mask.iloc[-recent:].to_numpy()
-        if m.any():
-            fig.add_trace(go.Scatter(
-                x=xidx[-recent:][m],
-                y=df["Low"].iloc[-recent:][m]*0.995,
-                mode="markers", name="Squeeze ON",
-                marker_symbol="circle", marker_size=8,
-                hovertemplate="Squeeze ON<extra></extra>"
-            ))
+        # Plot S/R hlines
+        for r in resistances:
+            fig.add_hline(y=r["level"], line=dict(dash="dot"),
+                          annotation_text=f"R ({r['touches']})", annotation_position="right")
+        for s in supports:
+            fig.add_hline(y=s["level"], line=dict(dash="dot"),
+                          annotation_text=f"S ({s['touches']})", annotation_position="right")
 
-    # Plot S/R hlines
-    for r in resistances:
-        fig.add_hline(y=r["level"], line=dict(dash="dot"),
-                      annotation_text=f"R ({r['touches']})", annotation_position="right")
-    for s in supports:
-        fig.add_hline(y=s["level"], line=dict(dash="dot"),
-                      annotation_text=f"S ({s['touches']})", annotation_position="right")
+        # Breakout markers (recent window)
+        NMARK = min(len(df), 400)
+        idx_slice = xidx[-NMARK:]
+        y_slice = df["Close"].iloc[-NMARK:]
 
-    # Breakout markers (recent window)
-    NMARK = min(len(df), 400)
-    idx_slice = xidx[-NMARK:]
-    y_slice = df["Close"].iloc[-NMARK:]
+        def add_markers(name, res, up_label, dn_label):
+            if not res: return
+            up_mask = res["up"].iloc[-NMARK:].fillna(False).to_numpy()
+            dn_mask = res["dn"].iloc[-NMARK:].fillna(False).to_numpy()
+            if up_mask.any():
+                fig.add_trace(go.Scatter(
+                    x=idx_slice[up_mask], y=y_slice[up_mask],
+                    mode="markers+text", name=f"{name} ↑",
+                    marker_symbol="triangle-up", marker_size=12,
+                    text=[up_label]*int(up_mask.sum()), textposition="top center",
+                    hovertemplate=f"{name} breakout↑<extra></extra>", legendgroup="breakouts"
+                ))
+            if dn_mask.any():
+                fig.add_trace(go.Scatter(
+                    x=idx_slice[dn_mask], y=y_slice[dn_mask],
+                    mode="markers+text", name=f"{name} ↓",
+                    marker_symbol="triangle-down", marker_size=12,
+                    text=[dn_label]*int(dn_mask.sum()), textposition="bottom center",
+                    hovertemplate=f"{name} breakdown↓<extra></extra>", legendgroup="breakouts"
+                ))
 
-    def add_markers(name, res, up_label, dn_label):
-        if not res: return
-        up_mask = res["up"].iloc[-NMARK:].fillna(False).to_numpy()
-        dn_mask = res["dn"].iloc[-NMARK:].fillna(False).to_numpy()
-        if up_mask.any():
-            fig.add_trace(go.Scatter(
-                x=idx_slice[up_mask], y=y_slice[up_mask],
-                mode="markers+text", name=f"{name} ↑",
-                marker_symbol="triangle-up", marker_size=12,
-                text=[up_label]*int(up_mask.sum()), textposition="top center",
-                hovertemplate=f"{name} breakout↑<extra></extra>", legendgroup="breakouts"
-            ))
-        if dn_mask.any():
-            fig.add_trace(go.Scatter(
-                x=idx_slice[dn_mask], y=y_slice[dn_mask],
-                mode="markers+text", name=f"{name} ↓",
-                marker_symbol="triangle-down", marker_size=12,
-                text=[dn_label]*int(dn_mask.sum()), textposition="bottom center",
-                hovertemplate=f"{name} breakdown↓<extra></extra>", legendgroup="breakouts"
-            ))
+        if "DC20" in breakout_series: add_markers("DC20", breakout_series["DC20"], "DC20↑", "DC20↓")
+        if "DC55" in breakout_series: add_markers("DC55", breakout_series["DC55"], "DC55↑", "DC55↓")
+        if "BB"   in breakout_series: add_markers("BB",   breakout_series["BB"],   "BB↑",   "BB↓")
+        if "W52"  in breakout_series: add_markers("W52",  breakout_series["W52"],  "W52↑",  "W52↓")
 
-    if "DC20" in breakout_series: add_markers("DC20", breakout_series["DC20"], "DC20↑", "DC20↓")
-    if "DC55" in breakout_series: add_markers("DC55", breakout_series["DC55"], "DC55↑", "DC55↓")
-    if "BB"   in breakout_series: add_markers("BB",   breakout_series["BB"],   "BB↑",   "BB↓")
-    if "W52"  in breakout_series: add_markers("W52",  breakout_series["W52"],  "W52↑",  "W52↓")
+        fig.update_layout(
+            title=f"{ticker} — {effective_period} / {interval}",
+            xaxis_rangeslider_visible=False,
+            height=740,
+            legend=dict(orientation="h", y=1.02),
+            margin=dict(t=60, r=20, b=20, l=20),
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    fig.update_layout(
-        title=f"{ticker} — {effective_period} / {interval}",
-        xaxis_rangeslider_visible=False,
-        height=740,
-        legend=dict(orientation="h", y=1.02),
-        margin=dict(t=60, r=20, b=20, l=20),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        # MACD panel
+        if macd_on:
+            fig_macd = go.Figure()
+            fig_macd.add_trace(go.Bar(x=xidx, y=macd_hist, name="MACD Hist", opacity=0.4))
+            fig_macd.add_trace(go.Scatter(x=xidx, y=macd_line, name="MACD", mode="lines"))
+            fig_macd.add_trace(go.Scatter(x=xidx, y=macd_sig_line, name="Signal", mode="lines"))
+            fig_macd.update_layout(height=240, margin=dict(t=10, r=20, b=10, l=20), showlegend=True)
+            st.plotly_chart(fig_macd, use_container_width=True)
 
-    # ------- MACD panel -------
-    if macd_on:
-        fig_macd = go.Figure()
-        fig_macd.add_trace(go.Bar(x=xidx, y=macd_hist, name="MACD Hist", opacity=0.4))
-        fig_macd.add_trace(go.Scatter(x=xidx, y=macd_line, name="MACD", mode="lines"))
-        fig_macd.add_trace(go.Scatter(x=xidx, y=macd_sig_line, name="Signal", mode="lines"))
-        fig_macd.update_layout(height=240, margin=dict(t=10, r=20, b=10, l=20), showlegend=True)
-        st.plotly_chart(fig_macd, use_container_width=True)
+    # -------------------- TAB 2: LEVELS & SIGNALS --------------------
+    with tabs[1]:
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Resistance levels")
+            st.dataframe(pd.DataFrame([{"Type":"R","Level":round(x["level"],2),"Touches":x["touches"]} for x in resistances]),
+                         use_container_width=True)
+        with right:
+            st.subheader("Support levels")
+            st.dataframe(pd.DataFrame([{"Type":"S","Level":round(x["level"],2),"Touches":x["touches"]} for x in supports]),
+                         use_container_width=True)
 
-    # ------- Levels tables -------
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Resistance levels")
-        st.dataframe(pd.DataFrame([{"Type":"R","Level":round(x["level"],2),"Touches":x["touches"]} for x in resistances]),
-                     use_container_width=True)
-    with right:
-        st.subheader("Support levels")
-        st.dataframe(pd.DataFrame([{"Type":"S","Level":round(x["level"],2),"Touches":x["touches"]} for x in supports]),
-                     use_container_width=True)
+        # Signal Summary (last bar)
+        st.markdown("### Signal Summary (last bar)")
+        last = df.iloc[-1]
+        vol20_last = float(np.nan_to_num(df["VOL20"].iloc[-1], nan=0.0))
 
-    # ------- Signal Summary (last bar) -------
-    st.markdown("### Signal Summary (last bar)")
-    last = df.iloc[-1]
-    vol20_last = float(np.nan_to_num(df["VOL20"].iloc[-1], nan=0.0))
+        lines = []
+        lines.append(f"**Close:** {last['Close']:.2f}   |   **Volume:** {int(last['Volume']):,}  (20-bar avg: {int(vol20_last):,})")
+        lines.append(f"**RSI14:** {last['RSI14']:.1f}   |   **ATR14:** {float(last['ATR14']):.2f}")
 
-    lines = []
-    lines.append(f"**Close:** {last['Close']:.2f}   |   **Volume:** {int(last['Volume']):,}  (20-bar avg: {int(vol20_last):,})")
-    lines.append(f"**RSI14:** {last['RSI14']:.1f}   |   **ATR14:** {float(last['ATR14']):.2f}")
+        # Regime
+        regime_txt = "✅ Bullish (EMA fast above slow)" if regime_now else "❌ Bearish (EMA fast below slow)"
+        lines.append(f"**Regime:** {regime_txt}")
 
-    # Regime
-    regime_txt = "✅ Bullish (EMA fast above slow)" if regime_now else "❌ Bearish (EMA fast below slow)"
-    lines.append(f"**Regime:** {regime_txt}")
+        # Supertrend
+        st_txt = "✅ Supertrend UP" if bool(st_up.iloc[-1]) else "❌ Supertrend DOWN"
+        lines.append(f"**Supertrend:** {st_txt}")
 
-    # Supertrend
-    st_txt = "✅ Supertrend UP" if bool(st_up.iloc[-1]) else "❌ Supertrend DOWN"
-    lines.append(f"**Supertrend:** {st_txt}")
+        # Squeeze
+        sq_txt = "⏳ Squeeze ON" if bool(sq_on_mask.iloc[-1]) else ("✅ Squeeze OFF (released)" if bool(sq_off_mask.iloc[-1]) else "—")
+        lines.append(f"**Squeeze:** {sq_txt}")
 
-    # Squeeze
-    sq_txt = "⏳ Squeeze ON" if bool(sq_on_mask.iloc[-1]) else ("✅ Squeeze OFF (released)" if bool(sq_off_mask.iloc[-1]) else "—")
-    lines.append(f"**Squeeze:** {sq_txt}")
+        # MACD flips
+        if macd_bull_flip:
+            lines.append("**MACD:** ✅ Histogram turned **positive**")
+        elif macd_bear_flip:
+            lines.append("**MACD:** ❌ Histogram turned **negative**")
+        else:
+            lines.append(f"**MACD:** Hist {('>0' if macd_hist.iloc[-1] > 0 else '<0')} (no fresh flip)")
 
-    # MACD flips
-    if macd_bull_flip:
-        lines.append("**MACD:** ✅ Histogram turned **positive**")
-    elif macd_bear_flip:
-        lines.append("**MACD:** ❌ Histogram turned **negative**")
-    else:
-        lines.append(f"**MACD:** Hist {('>0' if macd_hist.iloc[-1] > 0 else '<0')} (no fresh flip)")
+        # S/R signal (optionally filtered by regime)
+        if sr_sig:
+            nr = f"{sr_sig['level_up']:.2f}" if sr_sig['level_up'] else "n/a"
+            ns = f"{sr_sig['level_dn']:.2f}" if sr_sig['level_dn'] else "n/a"
+            srbull = sr_sig["bull"] and (regime_now if regime_on else True)
+            srbear = sr_sig["bear"] and ((not regime_now) if regime_on else True)
+            lines.append(f"**Nearest R/S:** {nr} / {ns}   |   **S/R Signals (regime-applied={regime_on}):** {'✅ Breakout' if srbull else '—'}   {'❌ Breakdown' if srbear else '—'}")
 
-    # S/R signal (optionally filtered by regime)
-    if sr_sig:
-        nr = f"{sr_sig['level_up']:.2f}" if sr_sig['level_up'] else "n/a"
-        ns = f"{sr_sig['level_dn']:.2f}" if sr_sig['level_dn'] else "n/a"
-        srbull = sr_sig["bull"] and (regime_now if regime_on else True)
-        srbear = sr_sig["bear"] and ((not regime_now) if regime_on else True)
-        lines.append(f"**Nearest R/S:** {nr} / {ns}   |   **S/R Signals (regime-applied={regime_on}):** {'✅ Breakout' if srbull else '—'}   {'❌ Breakdown' if srbear else '—'}")
+        # Breakouts (last bar), with regime filter if on
+        for name, res in breakout_series.items():
+            lb_up = bool(res["up"].iloc[-1]) if len(res["up"]) else False
+            lb_dn = bool(res["dn"].iloc[-1]) if len(res["dn"]) else False
+            if regime_on:
+                if lb_up and not regime_now: lb_up = False
+                if lb_dn and regime_now: lb_dn = False
+            lu = res["lvl_up"].iloc[-1] if pd.notna(res["lvl_up"].iloc[-1]) else None
+            ld = res["lvl_dn"].iloc[-1] if pd.notna(res["lvl_dn"].iloc[-1]) else None
+            lines.append(f"**{name}:** up {'✅' if lb_up else '—'} @ {f'{lu:.2f}' if lu else 'n/a'}   |   down {'❌' if lb_dn else '—'} @ {f'{ld:.2f}' if ld else 'n/a'}")
 
-    # Breakouts (last bar), with regime filter if on
-    for name, res in breakout_series.items():
-        lb_up = bool(res["up"].iloc[-1]) if len(res["up"]) else False
-        lb_dn = bool(res["dn"].iloc[-1]) if len(res["dn"]) else False
-        if regime_on:
-            if lb_up and not regime_now: lb_up = False
-            if lb_dn and regime_now: lb_dn = False
-        lu = res["lvl_up"].iloc[-1] if pd.notna(res["lvl_up"].iloc[-1]) else None
-        ld = res["lvl_dn"].iloc[-1] if pd.notna(res["lvl_dn"].iloc[-1]) else None
-        lines.append(f"**{name}:** up {'✅' if lb_up else '—'} @ {f'{lu:.2f}' if lu else 'n/a'}   |   down {'❌' if lb_dn else '—'} @ {f'{ld:.2f}' if ld else 'n/a'}")
+        st.write("\n\n".join(lines))
+        st.caption("Regime filter gates signals to trend direction. Squeeze marks volatility contraction. Educational use only.")
 
-    st.write("\n\n".join(lines))
-    st.caption("Regime filter gates signals to trend direction. Squeeze marks volatility contraction. Educational use only.")
+    # -------------------- TAB 3: NEWS --------------------
+    with tabs[2]:
+        with st.spinner("Loading news…"):
+            news_rows = get_news(ticker, limit=8)
+        render_news(news_rows)
 
-    # ------- News -------
-    st.markdown("### ")
-    with st.spinner("Loading news…"):
-        news_rows = get_news(ticker, limit=8)
-    render_news(news_rows)
+    # -------------------- TAB 4: CHEAT SHEET --------------------
+    with tabs[3]:
+        render_cheatsheet()
 
 # Footer
 st.caption("© TA Scout — for education, not investment advice.")
