@@ -7,3 +7,4 @@ feedparser>=6.0.10
 kaleido>=0.2.1       # for PNG export
 reportlab>=4.0.8     # for PDF report
 requests>=2.31       # for Telegram alerts
+Kaleido
