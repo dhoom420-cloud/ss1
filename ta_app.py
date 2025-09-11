@@ -1,17 +1,35 @@
 # ta_app.py
 # ---------------------------------------------------------
-# TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD, News + Cheat Sheet (Tabs)
+# TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD, News + Cheat Sheet (Tabs) + Mobile Mode
+# + Exports (PNG/CSV/PDF) + One-click Alerts (Telegram/Email)
 # ---------------------------------------------------------
-# pip install streamlit yfinance pandas numpy plotly
-# (optional for RSS fallback in News): pip install feedparser
 
+import io
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import streamlit as st
+import requests
+from datetime import datetime
+
+# PDF helpers
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 
 st.set_page_config(page_title="TA Scout", layout="wide")
+
+# ------- Small CSS for better mobile spacing / tabs -------
+st.markdown("""
+<style>
+@media (max-width: 640px) {
+  .block-container {padding-top: 0.6rem; padding-bottom: 1.2rem;}
+  .stTabs [role="tab"] {font-size: 0.92rem; padding: 0.25rem 0.5rem;}
+  .stDataFrame, .stTable {font-size: 0.92rem;}
+}
+</style>
+""", unsafe_allow_html=True)
 
 # =================== Yahoo constraints & plotting helpers ===================
 
@@ -21,7 +39,7 @@ _INTRADAY_MAX_PERIOD = {
     "5m": "60d",
     "15m": "60d",
     "30m": "60d",
-    "60m": "730d",  # 1h
+    "60m": "730d",
     "90m": "60d",
     "1h": "730d",
 }
@@ -37,7 +55,6 @@ def interval_to_minutes(interval: str) -> int:
     return 1440  # 1d+
 
 def coerce_period_for_interval(interval: str, period: str) -> str:
-    """Clamp period for intraday intervals to avoid empty frames."""
     if not is_intraday(interval):
         return period
     maxp = _INTRADAY_MAX_PERIOD.get(interval, "60d")
@@ -66,12 +83,11 @@ def coerce_period_for_interval(interval: str, period: str) -> str:
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [str(c).title() for c in df.columns]  # handle MultiIndex→strings
+    df.columns = [str(c).title() for c in df.columns]
     return df
 
 def clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_columns(df)
-    # Map alternates to OHLCV if needed
     if "Close" not in df.columns:
         for alt in ["Adj Close", "Adjusted Close", "Close*"]:
             if alt in df.columns:
@@ -89,7 +105,7 @@ def clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
             if alt in df.columns:
                 df["Low"] = df[alt]; break
     if "Volume" not in df.columns:
-        df["Volume"] = np.nan  # indices often miss volume
+        df["Volume"] = np.nan
 
     for c in ["Open","High","Low","Close","Volume"]:
         if c in df.columns:
@@ -331,31 +347,20 @@ def get_news_rss(ticker: str, limit: int = 8):
     feed = feedparser.parse(url)
     rows = []
     for e in (feed.entries or [])[: limit * 2]:
-        title = getattr(e, "title", "")
-        link = getattr(e, "link", "")
-        if not title or not link:
-            continue
+        title = getattr(e, "title", ""); link = getattr(e, "link", "")
+        if not title or not link: continue
         dt = None
         try:
             if getattr(e, "published_parsed", None):
                 dt = pd.Timestamp(*e.published_parsed[:6], tz="UTC").tz_convert("America/New_York")
         except Exception:
             dt = None
-        rows.append({
-            "title": title,
-            "link": link,
-            "publisher": getattr(getattr(e, "source", None) or {}, "title", None) or "Yahoo Finance",
-            "published": dt if dt is not None else pd.NaT,
-            "thumbnail": None,
-        })
-        if len(rows) >= limit:
-            break
+        rows.append({"title": title, "link": link, "publisher": "Yahoo Finance", "published": dt or pd.NaT, "thumbnail": None})
+        if len(rows) >= limit: break
     return rows
 
 def get_news(ticker: str, limit: int = 8):
-    rows = get_news_yf(ticker, limit=limit)
-    if not rows:
-        rows = get_news_rss(ticker, limit=limit)
+    rows = get_news_yf(ticker, limit=limit) or get_news_rss(ticker, limit=limit)
     try:
         rows.sort(key=lambda r: r.get("published") or pd.Timestamp.min, reverse=True)
     except Exception:
@@ -364,13 +369,11 @@ def get_news(ticker: str, limit: int = 8):
 
 def render_news(rows):
     if not rows:
-        st.info("No recent news found for this ticker.")
-        return
+        st.info("No recent news found for this ticker."); return
     for r in rows:
         c1, c2 = st.columns([1, 5])
         with c1:
-            if r.get("thumbnail"):
-                st.image(r["thumbnail"], use_container_width=True)
+            if r.get("thumbnail"): st.image(r["thumbnail"], use_container_width=True)
         with c2:
             st.markdown(f"**[{r['title']}]({r['link']})**")
             meta = []
@@ -449,9 +452,6 @@ def render_cheatsheet():
 - **Supertrend (n, m)**  
   Uses `HL2 ± m·ATR(n)`; flips when price pierces the active band.
 
-- **Chandelier Exit (n, k)** (optional)  
-  Long stop = `HighestHigh_n − k·ATR(n)`.
-
 ---
 
 ### Volume & Confirmation
@@ -461,8 +461,7 @@ def render_cheatsheet():
 
 ### Playbooks
 - **Breakout + Regime**: Donchian(20) ↑ **and** EMA50>EMA200 **and** Volume > 1.5×VOL20.  
-- **Squeeze Release**: Squeeze **ON** → **OFF** + MACD hist flip ↑ + close above KC mid / Supertrend.  
-- **Intraday**: ORB High break above VWAP (if added) with strong volume.
+- **Squeeze Release**: Squeeze **ON** → **OFF** + MACD hist flip ↑ + close above KC mid / Supertrend.
 
 *Educational use only — not investment advice.*
         """)
@@ -487,7 +486,6 @@ def get_data(ticker: str, period: str = "1y", interval: str = "1d", prepost: boo
         if df is not None and not df.empty:
             df = clean_ohlcv(df)
             if df.empty: continue
-            # Core indicators (+ EMA200 for regime)
             df["SMA20"]  = df["Close"].rolling(20, min_periods=1).mean()
             df["EMA50"]  = df["Close"].ewm(span=50,  adjust=False, min_periods=1).mean()
             df["EMA200"] = df["Close"].ewm(span=200, adjust=False, min_periods=1).mean()
@@ -545,7 +543,111 @@ with st.sidebar:
     macd_slow = st.number_input("MACD slow", value=26, min_value=5, max_value=100, step=1)
     macd_sig  = st.number_input("MACD signal", value=9, min_value=2, max_value=50, step=1)
 
+    st.markdown("---")
+    st.subheader("Alerts (optional, click button to send now)")
+    st.caption("Tip: store secrets in Streamlit → **Settings → Secrets**.")
+    tg_enabled = st.checkbox("Enable Telegram", value=False)
+    tg_token = st.text_input("Telegram Bot Token", value=st.secrets.get("telegram_token", ""), type="password")
+    tg_chat  = st.text_input("Telegram Chat ID", value=st.secrets.get("telegram_chat_id", ""), type="password")
+
+    email_enabled = st.checkbox("Enable Email (SMTP)", value=False)
+    smtp_host = st.text_input("SMTP host", value=st.secrets.get("smtp_host", ""))
+    smtp_port = st.number_input("SMTP port", value=int(st.secrets.get("smtp_port", 587)), step=1)
+    smtp_user = st.text_input("SMTP user", value=st.secrets.get("smtp_user", ""))
+    smtp_pass = st.text_input("SMTP password", value=st.secrets.get("smtp_password", ""), type="password")
+    email_from = st.text_input("From email", value=st.secrets.get("email_from", ""))
+    email_to   = st.text_input("To email",   value=st.secrets.get("email_to", ""))
+
+    st.markdown("---")
+    compact = st.checkbox("📱 Compact (mobile) mode", value=True)
+
 tabs = st.tabs(["📊 Chart", "🧱 Levels & Signals", "📰 News", "📘 Cheat Sheet"])
+
+def fig_to_png_bytes(fig, scale=2) -> bytes:
+    try:
+        return fig.to_image(format="png", scale=scale)  # needs kaleido
+    except Exception as e:
+        st.warning(f"PNG export failed (is kaleido installed?): {e}")
+        return b""
+
+def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=True).encode("utf-8")
+
+def build_pdf_report(ticker: str, summary_lines: list[str], chart_png: bytes, macd_png: bytes|None) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    W, H = letter
+    margin = 40
+    y = H - margin
+
+    # Title
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(margin, y, f"TA Scout Report — {ticker}")
+    y -= 18
+    c.setFont("Helvetica", 10)
+    c.drawString(margin, y, datetime.now().strftime("%b %d, %Y %I:%M %p"))
+    y -= 18
+
+    # Summary bullets
+    c.setFont("Helvetica", 11)
+    for line in summary_lines:
+        for seg in [line[i:i+95] for i in range(0, len(line), 95)]:
+            if y < 120: c.showPage(); y = H - margin; c.setFont("Helvetica", 11)
+            c.drawString(margin, y, "• " + seg)
+            y -= 14
+    y -= 8
+
+    # Chart
+    if chart_png:
+        if y < 320: c.showPage(); y = H - margin
+        img = ImageReader(io.BytesIO(chart_png))
+        iw, ih = img.getSize()
+        maxw = W - 2*margin
+        scale = maxw / iw
+        nh = ih*scale
+        c.drawImage(img, margin, y-nh, width=maxw, height=nh)
+        y = y - nh - 12
+
+    # MACD
+    if macd_png:
+        if y < 220: c.showPage(); y = H - margin
+        img2 = ImageReader(io.BytesIO(macd_png))
+        iw, ih = img2.getSize()
+        maxw = W - 2*margin
+        scale = maxw / iw
+        nh = ih*scale
+        c.drawImage(img2, margin, y-nh, width=maxw, height=nh)
+        y = y - nh - 12
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+def send_telegram(token: str, chat_id: str, text: str) -> bool:
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          data={"chat_id": chat_id, "text": text})
+        return r.ok
+    except Exception:
+        return False
+
+def send_email_smtp(host, port, user, password, sender, recipient, subject, body) -> bool:
+    import smtplib
+    from email.mime.text import MIMEText
+    try:
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = recipient
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            if user and password:
+                server.login(user, password)
+            server.sendmail(sender, [recipient], msg.as_string())
+        return True
+    except Exception:
+        return False
 
 # Primary action
 if st.button("Analyze") or ticker:
@@ -574,6 +676,10 @@ if st.button("Analyze") or ticker:
     if w52_on:  breakout_series["W52"]  = fiftytwo_week_breakout(df, vol_mult=vol_mult, bars=252)
 
     # ------- Regime / Supertrend / Squeeze / MACD -------
+    def regime_series(df, fast=50, slow=200):
+        ema_fast = df["Close"].ewm(span=fast, adjust=False, min_periods=1).mean()
+        ema_slow = df["Close"].ewm(span=slow, adjust=False, min_periods=1).mean()
+        return ema_fast, ema_slow, (ema_fast > ema_slow)
     ema_fast, ema_slow, regime = regime_series(df, fast=int(regime_fast), slow=int(regime_slow))
     regime_now = bool(regime.iloc[-1])
 
@@ -587,6 +693,12 @@ if st.button("Analyze") or ticker:
     macd_line, macd_sig_line, macd_hist = macd(df["Close"], fast=int(macd_fast), slow=int(macd_slow), signal=int(macd_sig))
     macd_bull_flip = (macd_hist.iloc[-1] > 0) and (macd_hist.iloc[-2] <= 0) if len(macd_hist) >= 2 else False
     macd_bear_flip = (macd_hist.iloc[-1] < 0) and (macd_hist.iloc[-2] >= 0) if len(macd_hist) >= 2 else False
+
+    # ------- Mobile scaling knobs -------
+    CHART_H = 520 if compact else 740
+    MACD_H  = 180 if compact else 240
+    MARK_SZ = 9   if compact else 12
+    NMARK   = min(len(df), 200 if compact else 400)
 
     # -------------------- TAB 1: CHART --------------------
     with tabs[0]:
@@ -602,7 +714,7 @@ if st.button("Analyze") or ticker:
         # Supertrend line + flips
         if st_on:
             fig.add_trace(go.Scatter(x=xidx, y=st_line, name="Supertrend", mode="lines"))
-            recent = min(len(df), 400)
+            recent = min(len(df), NMARK)
             flip_mask = st_cross.iloc[-recent:].fillna(False).to_numpy()
             if flip_mask.any():
                 y_slice = df["Close"].iloc[-recent:]
@@ -610,7 +722,7 @@ if st.button("Analyze") or ticker:
                 fig.add_trace(go.Scatter(
                     x=x_slice[flip_mask], y=y_slice[flip_mask],
                     mode="markers", name="ST Flip",
-                    marker_symbol="x", marker_size=10,
+                    marker_symbol="x", marker_size=MARK_SZ,
                     hovertemplate="Supertrend flip<extra></extra>"
                 ))
 
@@ -620,14 +732,14 @@ if st.button("Analyze") or ticker:
             fig.add_trace(go.Scatter(x=xidx, y=bb_l, name="BB Lower", mode="lines", opacity=0.2, showlegend=False))
             fig.add_trace(go.Scatter(x=xidx, y=kc_u, name="KC Upper", mode="lines", opacity=0.15, showlegend=False))
             fig.add_trace(go.Scatter(x=xidx, y=kc_l, name="KC Lower", mode="lines", opacity=0.15, showlegend=False))
-            recent = min(len(df), 400)
+            recent = min(len(df), NMARK)
             m = sq_on_mask.iloc[-recent:].to_numpy()
             if m.any():
                 fig.add_trace(go.Scatter(
                     x=xidx[-recent:][m],
                     y=df["Low"].iloc[-recent:][m]*0.995,
                     mode="markers", name="Squeeze ON",
-                    marker_symbol="circle", marker_size=8,
+                    marker_symbol="circle", marker_size=MARK_SZ,
                     hovertemplate="Squeeze ON<extra></extra>"
                 ))
 
@@ -639,11 +751,8 @@ if st.button("Analyze") or ticker:
             fig.add_hline(y=s["level"], line=dict(dash="dot"),
                           annotation_text=f"S ({s['touches']})", annotation_position="right")
 
-        # Breakout markers (recent window)
-        NMARK = min(len(df), 400)
-        idx_slice = xidx[-NMARK:]
-        y_slice = df["Close"].iloc[-NMARK:]
-
+        # Breakout markers
+        idx_slice = xidx[-NMARK:]; y_slice = df["Close"].iloc[-NMARK:]
         def add_markers(name, res, up_label, dn_label):
             if not res: return
             up_mask = res["up"].iloc[-NMARK:].fillna(False).to_numpy()
@@ -652,7 +761,7 @@ if st.button("Analyze") or ticker:
                 fig.add_trace(go.Scatter(
                     x=idx_slice[up_mask], y=y_slice[up_mask],
                     mode="markers+text", name=f"{name} ↑",
-                    marker_symbol="triangle-up", marker_size=12,
+                    marker_symbol="triangle-up", marker_size=MARK_SZ,
                     text=[up_label]*int(up_mask.sum()), textposition="top center",
                     hovertemplate=f"{name} breakout↑<extra></extra>", legendgroup="breakouts"
                 ))
@@ -660,11 +769,10 @@ if st.button("Analyze") or ticker:
                 fig.add_trace(go.Scatter(
                     x=idx_slice[dn_mask], y=y_slice[dn_mask],
                     mode="markers+text", name=f"{name} ↓",
-                    marker_symbol="triangle-down", marker_size=12,
+                    marker_symbol="triangle-down", marker_size=MARK_SZ,
                     text=[dn_label]*int(dn_mask.sum()), textposition="bottom center",
                     hovertemplate=f"{name} breakdown↓<extra></extra>", legendgroup="breakouts"
                 ))
-
         if "DC20" in breakout_series: add_markers("DC20", breakout_series["DC20"], "DC20↑", "DC20↓")
         if "DC55" in breakout_series: add_markers("DC55", breakout_series["DC55"], "DC55↑", "DC55↓")
         if "BB"   in breakout_series: add_markers("BB",   breakout_series["BB"],   "BB↑",   "BB↓")
@@ -672,33 +780,44 @@ if st.button("Analyze") or ticker:
 
         fig.update_layout(
             title=f"{ticker} — {effective_period} / {interval}",
-            xaxis_rangeslider_visible=False,
-            height=740,
-            legend=dict(orientation="h", y=1.02),
-            margin=dict(t=60, r=20, b=20, l=20),
+            xaxis_rangeslider_visible=False, height=CHART_H,
+            legend=dict(orientation="h", y=1.02), margin=dict(t=48 if compact else 60, r=16, b=16, l=16),
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # MACD panel
+        # ===== Export buttons (Chart tab) =====
+        chart_png = fig_to_png_bytes(fig)
+        if chart_png:
+            st.download_button("⬇️ Download chart (PNG)", data=chart_png,
+                               file_name=f"{ticker}_{effective_period}_{interval}_chart.png", mime="image/png")
+
+        macd_png = None
         if macd_on:
             fig_macd = go.Figure()
             fig_macd.add_trace(go.Bar(x=xidx, y=macd_hist, name="MACD Hist", opacity=0.4))
             fig_macd.add_trace(go.Scatter(x=xidx, y=macd_line, name="MACD", mode="lines"))
             fig_macd.add_trace(go.Scatter(x=xidx, y=macd_sig_line, name="Signal", mode="lines"))
-            fig_macd.update_layout(height=240, margin=dict(t=10, r=20, b=10, l=20), showlegend=True)
+            fig_macd.update_layout(height=MACD_H, margin=dict(t=8, r=16, b=8, l=16), showlegend=True)
             st.plotly_chart(fig_macd, use_container_width=True)
+            macd_png = fig_to_png_bytes(fig_macd)
+            if macd_png:
+                st.download_button("⬇️ Download MACD (PNG)", data=macd_png,
+                                   file_name=f"{ticker}_{effective_period}_{interval}_macd.png", mime="image/png")
+
+        st.session_state["exports"] = {"chart_png": chart_png, "macd_png": macd_png}
 
     # -------------------- TAB 2: LEVELS & SIGNALS --------------------
     with tabs[1]:
         left, right = st.columns(2)
+        res_rows = [{"Type":"R","Level":round(x["level"],2),"Touches":x["touches"]} for x in resistances]
+        sup_rows = [{"Type":"S","Level":round(x["level"],2),"Touches":x["touches"]} for x in supports]
+        limit = 5 if compact else max(len(res_rows), len(sup_rows))
         with left:
             st.subheader("Resistance levels")
-            st.dataframe(pd.DataFrame([{"Type":"R","Level":round(x["level"],2),"Touches":x["touches"]} for x in resistances]),
-                         use_container_width=True)
+            st.dataframe(pd.DataFrame(res_rows[:limit]), use_container_width=True, height=210 if compact else None)
         with right:
             st.subheader("Support levels")
-            st.dataframe(pd.DataFrame([{"Type":"S","Level":round(x["level"],2),"Touches":x["touches"]} for x in supports]),
-                         use_container_width=True)
+            st.dataframe(pd.DataFrame(sup_rows[:limit]), use_container_width=True, height=210 if compact else None)
 
         # Signal Summary (last bar)
         st.markdown("### Signal Summary (last bar)")
@@ -706,38 +825,22 @@ if st.button("Analyze") or ticker:
         vol20_last = float(np.nan_to_num(df["VOL20"].iloc[-1], nan=0.0))
 
         lines = []
-        lines.append(f"**Close:** {last['Close']:.2f}   |   **Volume:** {int(last['Volume']):,}  (20-bar avg: {int(vol20_last):,})")
-        lines.append(f"**RSI14:** {last['RSI14']:.1f}   |   **ATR14:** {float(last['ATR14']):.2f}")
+        lines.append(f"Close: {last['Close']:.2f} | Volume: {int(last['Volume']):,} (VOL20: {int(vol20_last):,})")
+        lines.append(f"RSI14: {last['RSI14']:.1f} | ATR14: {float(last['ATR14']):.2f}")
+        regime_txt = "Bullish (EMA fast>slow)" if regime_now else "Bearish (EMA fast<slow)"
+        lines.append(f"Regime: {regime_txt}")
+        st_txt = "Supertrend UP" if bool(st_up.iloc[-1]) else "Supertrend DOWN"
+        lines.append(f"Supertrend: {st_txt}")
+        sq_txt = "Squeeze ON" if bool(sq_on_mask.iloc[-1]) else ("Squeeze OFF (released)" if bool(sq_off_mask.iloc[-1]) else "—")
+        lines.append(f"Squeeze: {sq_txt}")
 
-        # Regime
-        regime_txt = "✅ Bullish (EMA fast above slow)" if regime_now else "❌ Bearish (EMA fast below slow)"
-        lines.append(f"**Regime:** {regime_txt}")
-
-        # Supertrend
-        st_txt = "✅ Supertrend UP" if bool(st_up.iloc[-1]) else "❌ Supertrend DOWN"
-        lines.append(f"**Supertrend:** {st_txt}")
-
-        # Squeeze
-        sq_txt = "⏳ Squeeze ON" if bool(sq_on_mask.iloc[-1]) else ("✅ Squeeze OFF (released)" if bool(sq_off_mask.iloc[-1]) else "—")
-        lines.append(f"**Squeeze:** {sq_txt}")
-
-        # MACD flips
-        if macd_bull_flip:
-            lines.append("**MACD:** ✅ Histogram turned **positive**")
-        elif macd_bear_flip:
-            lines.append("**MACD:** ❌ Histogram turned **negative**")
-        else:
-            lines.append(f"**MACD:** Hist {('>0' if macd_hist.iloc[-1] > 0 else '<0')} (no fresh flip)")
-
-        # S/R signal (optionally filtered by regime)
         if sr_sig:
             nr = f"{sr_sig['level_up']:.2f}" if sr_sig['level_up'] else "n/a"
             ns = f"{sr_sig['level_dn']:.2f}" if sr_sig['level_dn'] else "n/a"
             srbull = sr_sig["bull"] and (regime_now if regime_on else True)
             srbear = sr_sig["bear"] and ((not regime_now) if regime_on else True)
-            lines.append(f"**Nearest R/S:** {nr} / {ns}   |   **S/R Signals (regime-applied={regime_on}):** {'✅ Breakout' if srbull else '—'}   {'❌ Breakdown' if srbear else '—'}")
+            lines.append(f"Nearest R/S: {nr} / {ns} | S/R signals: {'Breakout' if srbull else '—'} {'Breakdown' if srbear else '—'}")
 
-        # Breakouts (last bar), with regime filter if on
         for name, res in breakout_series.items():
             lb_up = bool(res["up"].iloc[-1]) if len(res["up"]) else False
             lb_dn = bool(res["dn"].iloc[-1]) if len(res["dn"]) else False
@@ -746,10 +849,45 @@ if st.button("Analyze") or ticker:
                 if lb_dn and regime_now: lb_dn = False
             lu = res["lvl_up"].iloc[-1] if pd.notna(res["lvl_up"].iloc[-1]) else None
             ld = res["lvl_dn"].iloc[-1] if pd.notna(res["lvl_dn"].iloc[-1]) else None
-            lines.append(f"**{name}:** up {'✅' if lb_up else '—'} @ {f'{lu:.2f}' if lu else 'n/a'}   |   down {'❌' if lb_dn else '—'} @ {f'{ld:.2f}' if ld else 'n/a'}")
+            lines.append(f"{name}: up {'✓' if lb_up else '—'} @ {f'{lu:.2f}' if lu else 'n/a'} | down {'✓' if lb_dn else '—'} @ {f'{ld:.2f}' if ld else 'n/a'}")
 
-        st.write("\n\n".join(lines))
-        st.caption("Regime filter gates signals to trend direction. Squeeze marks volatility contraction. Educational use only.")
+        st.write("\n".join(f"- {t}" for t in lines))
+        st.caption("Regime filter gates signals to trend direction. Educational use only.")
+
+        # ===== Exports (CSV + PDF) =====
+        st.markdown("#### Export")
+        st.download_button("⬇️ Download data (CSV)", data=df_to_csv_bytes(df),
+                           file_name=f"{ticker}_{effective_period}_{interval}.csv", mime="text/csv")
+
+        exp = st.session_state.get("exports", {})
+        chart_png = exp.get("chart_png", b"")
+        macd_png  = exp.get("macd_png", None)
+        if st.button("⬇️ Build & download PDF report"):
+            pdf_bytes = build_pdf_report(ticker, lines, chart_png, macd_png)
+            st.download_button("Download PDF now", data=pdf_bytes,
+                               file_name=f"{ticker}_{effective_period}_{interval}_report.pdf",
+                               mime="application/pdf", use_container_width=True)
+
+        # ===== One-click alert (now) =====
+        st.markdown("#### Send alert now (if conditions met)")
+        # Simple long-trigger logic (customize as needed)
+        long_ok = (regime_now if regime_on else True) and bool(st_up.iloc[-1]) and (bool(sq_off_mask.iloc[-1]) or macd_bull_flip)
+        # Or a pure breakout confirmation:
+        dc20_up = bool(breakout_series.get("DC20", {}).get("up", pd.Series(dtype=bool)).iloc[-1]) if "DC20" in breakout_series else False
+        long_ok = long_ok or dc20_up
+
+        alert_text = f"{ticker} | {effective_period}/{interval}\n" + "\n".join(lines[:6])
+        if long_ok:
+            st.success("✅ Alert condition TRUE.")
+            if tg_enabled and tg_token and tg_chat:
+                ok = send_telegram(tg_token, tg_chat, "TA Scout Alert\n" + alert_text)
+                st.write("Telegram:", "sent ✅" if ok else "failed ❌")
+            if email_enabled and smtp_host and email_to and email_from:
+                ok = send_email_smtp(smtp_host, int(smtp_port), smtp_user, smtp_pass, email_from, email_to,
+                                     f"TA Scout Alert — {ticker}", alert_text)
+                st.write("Email:", "sent ✅" if ok else "failed ❌")
+        else:
+            st.info("No alert: conditions not met.")
 
     # -------------------- TAB 3: NEWS --------------------
     with tabs[2]:
