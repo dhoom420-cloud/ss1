@@ -12,11 +12,22 @@ import plotly.graph_objects as go
 import streamlit as st
 import requests
 from datetime import datetime
-
+# import reportlab
 # PDF helpers
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
+# OLD (remove these)
+# from reportlab.lib.pagesizes import letter
+# from reportlab.pdfgen import canvas
+# from reportlab.lib.utils import ImageReader
+
+# NEW (safe/optional import)
+REPORTLAB_OK = True
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
+except Exception:
+    REPORTLAB_OK = False
+
 
 st.set_page_config(page_title="TA Scout", layout="wide")
 
@@ -44,6 +55,23 @@ _INTRADAY_MAX_PERIOD = {
     "1h": "730d",
 }
 
+# add near the top of ta_app.py
+import os
+
+def sec(key: str, default: str = "") -> str:
+    """Safe secret/env getter. Falls back to env vars and default."""
+    try:
+        # if secrets.toml exists, this works
+        return st.secrets.get(key, st.secrets.get(key.upper(), default))
+    except Exception:
+        # no secrets.toml → try environment variables
+        return os.environ.get(key) or os.environ.get(key.upper(), default)
+
+def sec_int(key: str, default: int = 0) -> int:
+    try:
+        return int(sec(key, str(default)))
+    except Exception:
+        return default
 def is_intraday(interval: str) -> bool:
     return interval.endswith(("m", "h"))
 
@@ -497,7 +525,7 @@ def get_data(ticker: str, period: str = "1y", interval: str = "1d", prepost: boo
 
 # =================== UI ===================
 
-st.title("📈 TA Scout — S/R, Breakouts, Regime, Supertrend, Squeeze, MACD, News + Cheat Sheet")
+st.title("📈 TA Scout — Stocks")
 
 col0, col1, col2 = st.columns([2, 1, 1])
 with col0:
@@ -546,17 +574,15 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Alerts (optional, click button to send now)")
     st.caption("Tip: store secrets in Streamlit → **Settings → Secrets**.")
-    tg_enabled = st.checkbox("Enable Telegram", value=False)
-    tg_token = st.text_input("Telegram Bot Token", value=st.secrets.get("telegram_token", ""), type="password")
-    tg_chat  = st.text_input("Telegram Chat ID", value=st.secrets.get("telegram_chat_id", ""), type="password")
-
+    tg_token = st.text_input("Telegram Bot Token", value=sec("telegram_token", ""), type="password")
+    tg_chat  = st.text_input("Telegram Chat ID", value=sec("telegram_chat_id", ""), type="password")
     email_enabled = st.checkbox("Enable Email (SMTP)", value=False)
-    smtp_host = st.text_input("SMTP host", value=st.secrets.get("smtp_host", ""))
-    smtp_port = st.number_input("SMTP port", value=int(st.secrets.get("smtp_port", 587)), step=1)
-    smtp_user = st.text_input("SMTP user", value=st.secrets.get("smtp_user", ""))
-    smtp_pass = st.text_input("SMTP password", value=st.secrets.get("smtp_password", ""), type="password")
-    email_from = st.text_input("From email", value=st.secrets.get("email_from", ""))
-    email_to   = st.text_input("To email",   value=st.secrets.get("email_to", ""))
+    smtp_host = st.text_input("SMTP host", value=sec("smtp_host", ""))
+    smtp_port = st.number_input("SMTP port", value=sec_int("smtp_port", 587), step=1)
+    smtp_user = st.text_input("SMTP user", value=sec("smtp_user", ""))
+    smtp_pass = st.text_input("SMTP password", value=sec("smtp_password", ""), type="password")
+    email_from = st.text_input("From email", value=sec("email_from", ""))
+    email_to   = st.text_input("To email",   value=sec("email_to", ""))
 
     st.markdown("---")
     compact = st.checkbox("📱 Compact (mobile) mode", value=True)
