@@ -1,8 +1,9 @@
-streamlit
-yfinance
-pandas
-numpy
-plotly
-scipy
-feedparser
-
+streamlit>=1.32
+yfinance>=0.2.40
+pandas>=2.0
+numpy>=1.24
+plotly>=5.20
+feedparser>=6.0.10
+kaleido>=0.2.1       # for PNG export
+reportlab>=4.0.8     # for PDF report
+requests>=2.31       # for Telegram alerts
